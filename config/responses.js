@@ -101,5 +101,18 @@ module.exports = {
       "¿Tienen financiamiento?": "Sí, planes de financiamiento a meses sin intereses.",
       "¿Requiere hospitalización?": "Depende del procedimiento. Algunos son ambulatorios."
     }
+  },
+//Preparacion pre consulta 
+  // Preparación pre-consulta
+  preparation: {
+    title: "📋 PREPARACIÓN PARA TU CONSULTA",
+    list: [
+      "• Llevar identificación oficial",
+      "• Traer estudios médicos recientes",
+      "• Lista de medicamentos actuales",
+      "• Tener claros tus objetivos estéticos",
+      "• Preparar preguntas para el especialista",
+      "• Ayunar 8 horas si se requiere anestesia"
+    ]
   }
 };
