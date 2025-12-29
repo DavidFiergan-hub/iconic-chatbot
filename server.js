@@ -164,7 +164,7 @@ if (process.env.NODE_ENV !== 'production') {
         }
         try {
             await whatsappService.sendMessage(
-                'whatsapp:+5215512345678', // ¡REMPLAZA con TU NÚMERO personal!
+                'whatsapp:+593995592482', // ¡REMPLAZA con TU NÚMERO personal!
                 'Este es un mensaje de prueba desde Iconic Chatbot 🏥'
             );
             res.send('✅ Mensaje de prueba enviado (revisa tu WhatsApp).');
