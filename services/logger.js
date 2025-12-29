@@ -1,15 +1,9 @@
-// services/logger.js - Sistema de logging simplificado para Iconic Chatbot
+// services/logger.js - Sistema de logging simplificado y CORREGIDO
 const winston = require('winston');
 const path = require('path');
 const fs = require('fs');
 
-// Crear carpeta logs si no existe
-const logDir = path.join(__dirname, '../logs');
-if (!fs.existsSync(logDir)) {
-    fs.mkdirSync(logDir, { recursive: true });
-}
-
-// Configuración básica del logger
+// Configuración básica - SIN crear carpeta logs en producción (Render no lo permite)
 const logger = winston.createLogger({
     level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
     format: winston.format.combine(
@@ -22,34 +16,42 @@ const logger = winston.createLogger({
     ),
     defaultMeta: { service: 'iconic-chatbot' },
     transports: [
-        // Console output
+        // Siempre mostrar en consola
         new winston.transports.Console({
             format: winston.format.combine(
                 winston.format.colorize(),
                 winston.format.simple()
             )
-        }),
-        // File for all logs
-        new winston.transports.File({
-            filename: path.join(logDir, 'combined.log'),
-            maxsize: 5242880, // 5MB
-            maxFiles: 5
-        }),
-        // File for errors only
-        new winston.transports.File({
-            filename: path.join(logDir, 'error.log'),
-            level: 'error',
-            maxsize: 5242880,
-            maxFiles: 3
         })
     ]
 });
 
-// Métodos personalizados para el chatbot
-logger.logInteraction = function(userId, platform, messageType, data = {}) {
-    const safeUserId = userId ? userId.replace(/[0-9]/g, 'X') : 'anonymous';
+// SOLO en desarrollo, agregar archivos de log
+if (process.env.NODE_ENV !== 'production') {
+    const logDir = path.join(__dirname, '../logs');
+    if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+    }
     
-    this.info('INTERACTION_LOG', {
+    logger.add(new winston.transports.File({
+        filename: path.join(logDir, 'combined.log'),
+        maxsize: 5242880,
+        maxFiles: 5
+    }));
+    
+    logger.add(new winston.transports.File({
+        filename: path.join(logDir, 'error.log'),
+        level: 'error',
+        maxsize: 5242880,
+        maxFiles: 3
+    }));
+}
+
+// Métodos personalizados CORREGIDOS - usando logger directamente
+logger.logInteraction = function(userId, platform, messageType, data = {}) {
+    const safeUserId = userId ? userId.substring(0, 8) + '...' : 'anonymous';
+    
+    logger.info('INTERACTION_LOG', {
         timestamp: new Date().toISOString(),
         userId: safeUserId,
         platform: platform,
@@ -59,7 +61,7 @@ logger.logInteraction = function(userId, platform, messageType, data = {}) {
 };
 
 logger.logAppointment = function(appointmentData) {
-    this.info('APPOINTMENT_LOG', {
+    logger.info('APPOINTMENT_LOG', {
         timestamp: new Date().toISOString(),
         appointmentId: `app_${Date.now()}`,
         procedure: appointmentData.procedure,
@@ -70,7 +72,7 @@ logger.logAppointment = function(appointmentData) {
 };
 
 logger.logError = function(error, context = {}) {
-    this.error('ERROR_LOG', {
+    logger.error('ERROR_LOG', {
         timestamp: new Date().toISOString(),
         error: error.message,
         stack: error.stack ? error.stack.substring(0, 200) : 'No stack',
@@ -78,15 +80,17 @@ logger.logError = function(error, context = {}) {
     });
 };
 
-// Middleware para Express
+// Middleware para Express CORREGIDO - sin problemas de contexto
 logger.expressMiddleware = function(req, res, next) {
     const start = Date.now();
     
-    // Log cuando la respuesta termina
+    // Capturar el logger localmente para evitar problemas con 'this'
+    const log = logger;
+    
     res.on('finish', () => {
         const duration = Date.now() - start;
         
-        this.info('HTTP_REQUEST', {
+        log.info('HTTP_REQUEST', {
             method: req.method,
             url: req.url,
             status: res.statusCode,
