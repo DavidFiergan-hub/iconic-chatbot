@@ -1,15 +1,29 @@
-// services/botLogic.js - El cerebro del chatbot Iconic CON AGENDAMIENTO COMPLETO
+// services/botLogic.js - El cerebro del chatbot Iconic CON LOGGING Y VALIDACIONES
+const logger = require('./logger');
 const responses = require('../config/responses');
 
 class IconicBot {
     constructor() {
-        this.userSessions = new Map(); // { userId: { step, data... } }
+        logger.info('BOT_INITIALIZED', { 
+            version: '2.1', 
+            features: ['appointment', 'validation', 'logging'] 
+        });
+        this.userSessions = new Map();
         this.availableDates = this.generateAvailableDates();
     }
 
     // Método PRINCIPAL: procesa cualquier mensaje y devuelve respuesta
     processMessage(userId, userMessage) {
+        const startTime = Date.now();
         const message = userMessage.toLowerCase().trim();
+        const platform = this.detectPlatform(userId);
+        
+        logger.debug('MESSAGE_RECEIVED', {
+            userId: userId.substring(0, 10) + '...',
+            platform: platform,
+            messageLength: message.length,
+            hasSession: this.userSessions.has(userId)
+        });
         
         // 1. VERIFICAR SI EL USUARIO ESTÁ EN MEDIO DE UN AGENDAMIENTO
         if (this.userSessions.has(userId)) {
@@ -21,7 +35,32 @@ class IconicBot {
         
         // 2. Si no está agendando, detectar intención normal
         const intent = this.detectIntent(message);
-        return this.generateResponse(intent, message, userId);
+        const response = this.generateResponse(intent, message, userId);
+        
+        // 3. Loggear la interacción
+        const duration = Date.now() - startTime;
+        logger.logInteraction(
+            userId,
+            platform,
+            'processed',
+            {
+                intent: intent,
+                responseType: response.type,
+                durationMs: duration,
+                hasAppointment: response.type.includes('appointment')
+            }
+        );
+        
+        return response;
+    }
+
+    // Método para detectar plataforma desde userId
+    detectPlatform(userId) {
+        if (userId.includes('whatsapp')) return 'whatsapp';
+        if (userId.includes('fb_')) return 'facebook';
+        if (userId.includes('ig_')) return 'instagram';
+        if (userId.includes('web') || userId.includes('test')) return 'web';
+        return 'unknown';
     }
 
     detectIntent(message) {
@@ -86,6 +125,7 @@ class IconicBot {
                     step: 'appointment_name',
                     data: {}
                 });
+                logger.info('APPOINTMENT_STARTED', { userId: userId });
                 return {
                     text: `🎯 **INICIANDO AGENDAMIENTO** 🎯\n\n${responses.appointment.steps.join('\n')}\n\n${responses.appointment.questions[0]}`,
                     type: 'appointment_start',
@@ -118,12 +158,71 @@ class IconicBot {
         }
     }
 
+    // ==================== MÉTODOS DE VALIDACIÓN ====================
+    validatePhone(phone) {
+        // 1. Limpiar el número
+        const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
+        
+        // 2. Validar que sean solo dígitos
+        if (!/^\d+$/.test(cleanPhone)) {
+            return { 
+                valid: false, 
+                reason: 'Solo debe contener números (sin espacios, guiones o símbolos)' 
+            };
+        }
+        
+        // 3. Validar longitud
+        if (cleanPhone.length < 8 || cleanPhone.length > 15) {
+            return { 
+                valid: false, 
+                reason: `Longitud incorrecta (${cleanPhone.length} dígitos). Debe tener 8-15 dígitos.` 
+            };
+        }
+        
+        return { 
+            valid: true, 
+            clean: cleanPhone,
+            formatted: `+${cleanPhone}`
+        };
+    }
+
+    validateEmail(email) {
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        
+        if (!emailRegex.test(email.toLowerCase())) {
+            return { 
+                valid: false, 
+                reason: 'Formato inválido. Ejemplo: nombre@dominio.com' 
+            };
+        }
+        
+        // Validar dominios de prueba comunes
+        const testDomains = ['example.com', 'test.com', 'mailinator.com', 'tempmail.com'];
+        const domain = email.split('@')[1];
+        
+        if (testDomains.includes(domain.toLowerCase())) {
+            return { 
+                valid: false, 
+                reason: 'Por favor usa un correo electrónico real (no uno de prueba)' 
+            };
+        }
+        
+        return { valid: true, email: email.toLowerCase() };
+    }
+
     // ==================== FLUJO COMPLETO DE AGENDAMIENTO ====================
     handleAppointmentFlow(userId, message, session) {
+        logger.info('APPOINTMENT_FLOW', {
+            userId: userId,
+            step: session.step,
+            inputLength: message.length
+        });
+        
         switch(session.step) {
             case 'appointment_name':
                 session.data.name = message;
                 session.step = 'appointment_phone';
+                logger.info('APPOINTMENT_NAME_SET', { name: message });
                 return {
                     text: `✅ Nombre registrado: ${message}\n\n${responses.appointment.questions[2]} (Ej: 5512345678)`,
                     type: 'appointment_step',
@@ -131,33 +230,52 @@ class IconicBot {
                 };
                 
             case 'appointment_phone':
-                // Validación simple de teléfono
-                if (!message.match(/^[0-9]{10,15}$/)) {
+                const phoneValidation = this.validatePhone(message);
+                if (!phoneValidation.valid) {
+                    logger.info('PHONE_VALIDATION_FAILED', {
+                        input: message,
+                        reason: phoneValidation.reason
+                    });
+                    
                     return {
-                        text: '❌ Por favor, ingresa un número de teléfono válido (10-15 dígitos, sin espacios ni símbolos).',
+                        text: `❌ **Número inválido**\n\n${phoneValidation.reason}\n\nEjemplos válidos:\n• 0987654321\n• +593987654321\n\nPor favor, ingresa tu número nuevamente:`,
                         type: 'appointment_error',
                         step: 2
                     };
                 }
-                session.data.phone = message;
+                session.data.phone = phoneValidation.formatted;
                 session.step = 'appointment_email';
+                
+                logger.info('PHONE_VALIDATION_SUCCESS', {
+                    phone: phoneValidation.formatted
+                });
+                
                 return {
-                    text: `✅ Teléfono registrado\n\n${responses.appointment.questions[3]} (Ej: paciente@email.com)`,
+                    text: `✅ **Teléfono registrado:** ${phoneValidation.formatted}\n\n${responses.appointment.questions[3]}\n\n_Ejemplo: paciente@gmail.com_`,
                     type: 'appointment_step',
                     step: 3
                 };
                 
             case 'appointment_email':
-                // Validación simple de email
-                if (!message.includes('@') || !message.includes('.')) {
+                const emailValidation = this.validateEmail(message);
+                if (!emailValidation.valid) {
+                    logger.info('EMAIL_VALIDATION_FAILED', {
+                        input: message,
+                        reason: emailValidation.reason
+                    });
+                    
                     return {
-                        text: '❌ Por favor, ingresa un correo electrónico válido.',
+                        text: `❌ **Correo inválido**\n\n${emailValidation.reason}\n\nPor favor, ingresa tu correo nuevamente:`,
                         type: 'appointment_error',
                         step: 3
                     };
                 }
-                session.data.email = message;
+                session.data.email = emailValidation.email;
                 session.step = 'appointment_procedure';
+                
+                logger.info('EMAIL_VALIDATION_SUCCESS', {
+                    email: emailValidation.email
+                });
                 
                 // Mostrar opciones de procedimientos
                 const procedureOptions = responses.services.list.map((item, index) => {
@@ -178,6 +296,11 @@ class IconicBot {
                 );
                 
                 if (isNaN(procedureIndex) || procedureIndex < 0 || procedureIndex >= procedures.length) {
+                    logger.info('PROCEDURE_VALIDATION_FAILED', {
+                        input: message,
+                        validRange: `1-${procedures.length}`
+                    });
+                    
                     return {
                         text: `❌ Por favor, selecciona un número válido entre 1 y ${procedures.length}.`,
                         type: 'appointment_error',
@@ -187,6 +310,10 @@ class IconicBot {
                 
                 session.data.procedure = procedures[procedureIndex];
                 session.step = 'appointment_date';
+                
+                logger.info('PROCEDURE_SELECTED', {
+                    procedure: session.data.procedure
+                });
                 
                 // Mostrar próximas 3 fechas disponibles
                 const dateOptions = this.availableDates.slice(0, 3).map((dateObj, index) => {
@@ -208,6 +335,11 @@ class IconicBot {
             case 'appointment_date':
                 const dateIndex = parseInt(message) - 1;
                 if (isNaN(dateIndex) || dateIndex < 0 || dateIndex >= 3) {
+                    logger.info('DATE_VALIDATION_FAILED', {
+                        input: message,
+                        validRange: '1-3'
+                    });
+                    
                     return {
                         text: '❌ Por favor, selecciona un número válido entre 1 y 3.',
                         type: 'appointment_error',
@@ -218,6 +350,10 @@ class IconicBot {
                 const selectedDate = this.availableDates[dateIndex];
                 session.data.date = selectedDate.date;
                 session.step = 'appointment_time';
+                
+                logger.info('DATE_SELECTED', {
+                    date: session.data.date
+                });
                 
                 // Mostrar horarios disponibles para esa fecha
                 const timeOptions = selectedDate.slots.map((time, index) => 
@@ -237,6 +373,11 @@ class IconicBot {
                 );
                 
                 if (isNaN(timeIndex) || timeIndex < 0 || timeIndex >= selectedDateObj.slots.length) {
+                    logger.info('TIME_VALIDATION_FAILED', {
+                        input: message,
+                        validRange: `1-${selectedDateObj.slots.length}`
+                    });
+                    
                     return {
                         text: `❌ Por favor, selecciona un número válido entre 1 y ${selectedDateObj.slots.length}.`,
                         type: 'appointment_error',
@@ -246,6 +387,10 @@ class IconicBot {
                 
                 session.data.time = selectedDateObj.slots[timeIndex];
                 session.step = 'appointment_confirm';
+                
+                logger.info('TIME_SELECTED', {
+                    time: session.data.time
+                });
                 
                 // Mostrar resumen para confirmación
                 const summary = `
@@ -270,11 +415,18 @@ Responde **SI** para confirmar o **NO** para cancelar.
                 
             case 'appointment_confirm':
                 if (message.toLowerCase() === 'si' || message.toLowerCase() === 'sí') {
-                    // GUARDAR LA CITA (aquí iría la conexión a tu base de datos)
-                    this.saveAppointmentToDatabase(session.data);
+                    // GUARDAR LA CITA
+                    this.saveAppointmentToDatabase(session.data, userId);
                     
                     // Limpiar sesión
                     this.userSessions.delete(userId);
+                    
+                    logger.info('APPOINTMENT_CONFIRMED', {
+                        userId: userId,
+                        procedure: session.data.procedure,
+                        date: session.data.date,
+                        time: session.data.time
+                    });
                     
                     return {
                         text: `🎉 **¡CITA CONFIRMADA EXITOSAMENTE!** 🎉
@@ -296,6 +448,7 @@ ${responses.preparation?.list?.join('\n') || '• Llevar identificación oficial
                 } else {
                     // Cancelar
                     this.userSessions.delete(userId);
+                    logger.info('APPOINTMENT_CANCELLED', { userId: userId });
                     return {
                         text: '❌ Agendamiento cancelado. Si deseas una cita más adelante, no dudes en decírnoslo.',
                         type: 'appointment_cancelled'
@@ -304,6 +457,7 @@ ${responses.preparation?.list?.join('\n') || '• Llevar identificación oficial
                 
             default:
                 this.userSessions.delete(userId);
+                logger.info('APPOINTMENT_RESET', { userId: userId });
                 return {
                     text: '⚠️ Sesión de agendamiento reiniciada. ¿En qué más puedo ayudarte?',
                     type: 'appointment_reset'
@@ -329,19 +483,26 @@ ${responses.preparation?.list?.join('\n') || '• Llevar identificación oficial
             }
         }
         
+        logger.debug('AVAILABLE_DATES_GENERATED', { count: dates.length });
         return dates;
     }
 
-    saveAppointmentToDatabase(appointmentData) {
-        // AQUÍ CONECTARÍAS CON TU BASE DE DATOS MONGODB
-        // Por ahora, solo lo registramos en la consola
-        console.log('📅 CITA GUARDADA:', appointmentData);
+    saveAppointmentToDatabase(appointmentData, userId) {
+        logger.logAppointment({
+            userId: userId,
+            procedure: appointmentData.procedure,
+            date: appointmentData.date,
+            time: appointmentData.time,
+            status: 'CONFIRMED',
+            hasEmail: !!appointmentData.email,
+            hasPhone: !!appointmentData.phone
+        });
         
-        // En un sistema real, aquí harías:
+        console.log('📅 CITA GUARDADA EN LOGS:', appointmentData);
+        
+        // TODO: Conectar con base de datos real
         // const Appointment = require('../models/Appointment');
         // await Appointment.create(appointmentData);
-        
-        // También podrías enviar notificaciones por email aquí
     }
 }
 
