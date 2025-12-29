@@ -6,6 +6,9 @@ const PORT = process.env.PORT || 3000;
 // Importar el cerebro del bot
 const bot = require('./services/botLogic');
 
+//Twilio whatsapp
+const WhatsAppService = require('./platforms/whatsappService');
+
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -113,4 +116,61 @@ app.listen(PORT, () => {
   👉 API Chat: POST http://localhost:${PORT}/api/chat
   👉 Lógica del bot: ACTIVADA
   `);
+})
+// twilio whatsapp
+// ==================== CONFIGURACIÓN WHATSAPP (TWILIO) ====================
+// NOTA: Las credenciales se obtienen de variables de entorno.
+const WHATSAPP_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const WHATSAPP_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const WHATSAPP_NUMBER = process.env.TWILIO_WHATSAPP_NUMBER; // Formato: 'whatsapp:+14155238886'
+
+// Inicializar el servicio de WhatsApp solo si las credenciales existen
+let whatsappService = null;
+if (WHATSAPP_ACCOUNT_SID && WHATSAPP_AUTH_TOKEN && WHATSAPP_NUMBER) {
+    whatsappService = new WhatsAppService(WHATSAPP_ACCOUNT_SID, WHATSAPP_AUTH_TOKEN, WHATSAPP_NUMBER);
+    console.log('✅ Servicio de WhatsApp (Twilio) inicializado');
+} else {
+    console.log('⚠️  Credenciales de WhatsApp no encontradas. El webhook estará inactivo.');
+}
+
+// Ruta del WEBHOOK que Twilio llamará cuando llegue un mensaje
+app.post('/webhook/whatsapp', async (req, res) => {
+    if (!whatsappService) {
+        return res.status(503).send('Servicio de WhatsApp no configurado.');
+    }
+
+    try {
+        // 1. Pasar el mensaje entrante a nuestro servicio
+        const twimlResponse = await whatsappService.handleIncomingMessage(
+            req.body,
+            (userId, message) => bot.processMessage(userId, message) // Usamos nuestro bot
+        );
+
+        // 2. Configurar la respuesta para Twilio
+        res.type('text/xml');
+        res.send(twimlResponse);
+
+    } catch (error) {
+        console.error('❌ Error en webhook /whatsapp:', error);
+        res.status(500).send('Error interno del servidor');
+    }
 });
+
+// Ruta de prueba para enviar un mensaje MANUALMENTE (¡Quítala en producción!)
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/test-send-whatsapp', async (req, res) => {
+        if (!whatsappService) {
+            return res.send('WhatsApp no configurado. Establece las variables de entorno.');
+        }
+        try {
+            await whatsappService.sendMessage(
+                'whatsapp:+5215512345678', // ¡REMPLAZA con TU NÚMERO personal!
+                'Este es un mensaje de prueba desde Iconic Chatbot 🏥'
+            );
+            res.send('✅ Mensaje de prueba enviado (revisa tu WhatsApp).');
+        } catch (error) {
+            res.send(`❌ Error: ${error.message}`);
+        }
+    });
+}
+;
